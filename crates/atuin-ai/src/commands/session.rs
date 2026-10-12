@@ -447,6 +447,8 @@ pub async fn import_all(
     live: bool,
 ) -> Result<()> {
     let mut client = AiClient::from_settings(settings).await?;
+    // A daemon just started rebuilds its sessions first, and refuses an import until done.
+    client.wait_for_sessions(|_| {}).await?;
     let style = if live {
         Style::Pretty
     } else {

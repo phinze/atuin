@@ -47,12 +47,11 @@ pub struct SessionCaptureEngine {
 }
 
 impl SessionCaptureEngine {
-    /// Capture every harness's sessions from now on: one with nothing stored yet only once it
-    /// changes, then whole. The rest, sessions nobody touches since, are history, which is
-    /// `atuin ai session import`'s to bring in.
-    pub fn spawn(sink: &Arc<Sink>, pool: &BlockingPool) -> Self {
+    /// Capture every harness's sessions from `since` on: one with nothing stored yet only once
+    /// it changes after, then whole. The rest, sessions nobody touches since, are history, which
+    /// is `atuin ai session import`'s to bring in.
+    pub fn spawn(sink: &Arc<Sink>, pool: &BlockingPool, since: SystemTime) -> Self {
         let mut listeners = Vec::new();
-        let since = SystemTime::now();
 
         for harness in AnyHarness::all() {
             let Some(sessions) = harness.sessions(pool) else {

@@ -848,17 +848,23 @@ mod tests {
         "[daemon]\nenabled = true\nautostart = false\n\n[pty_proxy]\nenabled = \
          true\n\n[output]\nenabled = true\n"
     )]
-    #[case::ai_sessions(
-        Feature::AiSessions,
-        "",
-        false,
-        "[daemon]\nenabled = true\nautostart = true\n\n[ai]\ncapture_sessions = true\n"
+    #[cfg_attr(
+        all(feature = "ai", feature = "daemon"),
+        case::ai_sessions(
+            Feature::AiSessions,
+            "",
+            false,
+            "[daemon]\nenabled = true\nautostart = true\n\n[ai]\ncapture_sessions = true\n"
+        )
     )]
-    #[case::ai_sessions_with_daemon_already_enabled(
-        Feature::AiSessions,
-        "[daemon]\nenabled = true\nautostart = false\n",
-        true,
-        "[daemon]\nenabled = true\nautostart = false\n\n[ai]\ncapture_sessions = true\n"
+    #[cfg_attr(
+        all(feature = "ai", feature = "daemon"),
+        case::ai_sessions_with_daemon_already_enabled(
+            Feature::AiSessions,
+            "[daemon]\nenabled = true\nautostart = false\n",
+            true,
+            "[daemon]\nenabled = true\nautostart = false\n\n[ai]\ncapture_sessions = true\n"
+        )
     )]
     fn enable_writes(
         #[case] feature: Feature,
@@ -876,10 +882,13 @@ mod tests {
     #[rstest]
     #[case::daemon(Feature::Daemon, "", "[daemon]\nenabled = false\nautostart = false\n")]
     #[case::output_capture(Feature::OutputCapture, "", "[output]\nenabled = false\n")]
-    #[case::ai_sessions(
-        Feature::AiSessions,
-        "[daemon]\nenabled = true\n\n[ai]\ncapture_sessions = true\n",
-        "[daemon]\nenabled = true\n\n[ai]\ncapture_sessions = false\n"
+    #[cfg_attr(
+        all(feature = "ai", feature = "daemon"),
+        case::ai_sessions(
+            Feature::AiSessions,
+            "[daemon]\nenabled = true\n\n[ai]\ncapture_sessions = true\n",
+            "[daemon]\nenabled = true\n\n[ai]\ncapture_sessions = false\n"
+        )
     )]
     #[case::daemon_search(
         Feature::Daemon,

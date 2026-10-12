@@ -57,7 +57,8 @@ impl Terminal {
         None
     }
 
-    /// Ask a yes-or-no question, yes by default, laid out as `atuin setup` asks.
+    /// Ask a yes-or-no question, yes by default, laid out as `atuin setup` asks. No once input
+    /// has ended.
     fn ask(&mut self, question: &str, description: &str, note: Option<&str>) -> Result<bool> {
         let Some(input) = self.input.as_mut() else {
             return Ok(false);
@@ -72,7 +73,11 @@ impl Terminal {
         self.output.flush()?;
 
         let mut answer = String::new();
-        input.read_line(&mut answer)?;
+        // Ended (Ctrl-D) is a no; only Enter takes the default.
+        if input.read_line(&mut answer)? == 0 {
+            writeln!(self.output)?;
+            return Ok(false);
+        }
         Ok(matches!(answer.trim().to_lowercase().as_str(), "" | "y" | "yes"))
     }
 }
@@ -167,4 +172,30 @@ pub async fn enable(settings: &Settings, term: &mut Terminal) -> Result<Settings
     }
 
     Ok(settings)
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case::enter("\n", true)]
+    #[case::yes("y\n", true)]
+    #[case::no("n\n", false)]
+    #[case::ended("", false)]
+    fn an_answer_is_yes_by_default_and_no_once_input_ends(
+        #[case] typed: &'static str,
+        #[case] yes: bool,
+    ) {
+        let mut term = Terminal {
+            input: Some(Box::new(typed.as_bytes())),
+            output: Box::new(io::sink()),
+            live: false,
+            #[cfg(unix)]
+            _cooked: None,
+        };
+        assert_eq!(term.ask("q", "d", None).unwrap(), yes);
+    }
 }
