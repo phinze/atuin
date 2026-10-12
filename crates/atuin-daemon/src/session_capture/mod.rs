@@ -752,6 +752,10 @@ impl AiHarnessSessionCapture {
             let mut state = state.clone();
             async move {
                 if state.wait_for(|state| *state == StoreState::Ready).await.is_ok() {
+                    // Turned off (or on again) meanwhile, it starts from when it next is on.
+                    if enabled.has_changed().unwrap_or(true) {
+                        started = None;
+                    }
                     follow(enabled, || {
                         let since = started.take().unwrap_or_else(SystemTime::now);
                         SessionCaptureEngine::spawn(&sink, &pool, since)
