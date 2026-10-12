@@ -87,6 +87,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::OsStr;
+use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1187,6 +1188,35 @@ struct Reads {
 }
 
 impl Reads {
+    /// When opencode last updated session `id` or anything of it, in milliseconds since the Unix
+    /// epoch, in whichever of its layouts it has; `None` when that can't be read.
+    async fn updated(self: &Arc<Self>, id: &str) -> Option<i64> {
+        const UPDATED: [&str; 5] = [
+            "SELECT MAX(time_updated) FROM session WHERE id = ?1",
+            "SELECT MAX(time_updated) FROM message WHERE session_id = ?1",
+            "SELECT MAX(time_updated) FROM part WHERE session_id = ?1",
+            "SELECT MAX(time_updated) FROM session_v2 WHERE id = ?1",
+            "SELECT MAX(time_updated) FROM session_message WHERE session_id = ?1",
+        ];
+        let id = id.to_owned();
+        self.read("update time read", move |conn| {
+            Box::pin(async move {
+                let mut updated = None;
+                for sql in UPDATED {
+                    // A table this opencode doesn't have says nothing.
+                    let at = query_scalar::<Sqlite, Option<i64>>(sql)
+                        .bind(&id)
+                        .fetch_one(&mut *conn)
+                        .await;
+                    updated = updated.max(at.ok().flatten());
+                }
+                Ok(updated)
+            })
+        })
+        .await
+        .flatten()
+    }
+
     fn new(db: PathBuf) -> Self {
         Self {
             db,
@@ -1530,6 +1560,20 @@ impl Session for OpencodeSession {
     /// aggregate's rows, then what opencode 2.0 wrote of it (see `v2`), its settled rows only.
     /// Independent of [`messages`](Self::messages): it reads a place of its own, so a session
     /// being tailed is undisturbed by it.
+    /// Once opencode has updated the session since `since`, as each row the tail wakes it for may.
+    fn changed_after(mut self, since: SystemTime) -> impl Future<Output = Option<Self>> + Send {
+        let since = OffsetDateTime::from(since).unix_timestamp_nanos() / 1_000_000;
+        async move {
+            loop {
+                let updated = self.reads.updated(&self.id).await;
+                if updated.is_none_or(|at| i128::from(at) >= since) {
+                    return Some(self);
+                }
+                self.wake.changed().await.ok()?;
+            }
+        }
+    }
+
     fn read(&self) -> impl Stream<Item = Result<OpencodeMessage, MessageError>> + Send + 'static {
         let reads = Arc::clone(&self.reads);
         let mut reader = Reader::from_start(self.aggregate.clone(), Arc::clone(&reads));
@@ -2856,7 +2900,7 @@ mod tests {
             .build()
             .listener()
             .unwrap()
-            .events(|_| async { None })
+            .events(SystemTime::UNIX_EPOCH, |_| async { None })
             .boxed()
     }
 

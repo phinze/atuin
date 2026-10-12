@@ -70,8 +70,8 @@ enum SubCmd {
     /// Follow sessions and messages as they are recorded (until interrupted).
     Tail,
 
-    /// Import every session the agents have on disk, such as ones from before capture was on.
-    /// What is already captured is not stored again.
+    /// Import every session the agents have on this machine, including those capture leaves
+    /// alone: the ones nobody has gone on with since it was turned on.
     Import {
         /// Only import sessions from this harness.
         #[arg(long, value_parser = parse_harness)]
@@ -133,8 +133,8 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
     if !settings.ai.capture_sessions {
         // stderr so it never pollutes piped stdout (json/ndjson).
         eprintln!(
-            "note: AI session capture is off. Enable it with `ai.capture_sessions = true` in your \
-             atuin config to record new sessions."
+            "note: AI session capture is off. Run `atuin config enable ai-sessions` to record new \
+             sessions."
         );
     }
 
@@ -169,7 +169,7 @@ pub async fn run(cmd: Cmd, settings: &Settings) -> Result<()> {
             limit,
         } => search(&mut client, &query, harness.map(HarnessKind::from), limit, style).await,
         SubCmd::Tail => tail(&mut client, style).await,
-        SubCmd::Import { harness } => import(&mut client, harness, style).await,
+        SubCmd::Import { harness } => import(&mut client, harness, style, &mut io::stdout()).await,
     };
 
     // A downstream reader that closes the pipe (e.g. `atuin ai session list | head`) makes the next
@@ -439,16 +439,48 @@ async fn tail(client: &mut AiClient, style: Style) -> Result<()> {
     Ok(())
 }
 
-async fn import(client: &mut AiClient, harness: Option<HarnessKind>, style: Style) -> Result<()> {
+/// Import every agent's sessions on this machine through the daemon, its progress on `out`: one
+/// line rewritten when `live` (a terminal), a line per session otherwise.
+pub async fn import_all(
+    settings: &Settings,
+    out: &mut (dyn Write + Send),
+    live: bool,
+) -> Result<()> {
+    let mut client = AiClient::from_settings(settings).await?;
+    let style = if live {
+        Style::Pretty
+    } else {
+        Style::Plain
+    };
+    import(&mut client, None, style, out).await
+}
+
+async fn import(
+    client: &mut AiClient,
+    harness: Option<HarnessKind>,
+    style: Style,
+    out: &mut (dyn Write + Send),
+) -> Result<()> {
     let mut stream = client.import_sessions(harness).await?;
 
     // `--style json` is one document, so its per-session progress and final summary are collected
     // and written once at the end; `--style ndjson` and the human styles stream event by event.
     let mut json_sessions: Vec<serde_json::Value> = Vec::new();
     let mut json_summary: Option<serde_json::Value> = None;
+    let (mut sessions, mut imported, mut skipped) = (0u64, 0u64, 0u64);
 
     while let Some(event) = stream.next().await {
-        let Some(event) = event?.event else {
+        let event = match event {
+            Ok(event) => event,
+            Err(e) => {
+                if sessions > 0 && matches!(style, Style::Pretty) {
+                    // Finish the progress line so the error starts on its own.
+                    writeln!(out)?;
+                }
+                return Err(e.into());
+            }
+        };
+        let Some(event) = event.event else {
             continue;
         };
 
@@ -478,9 +510,7 @@ async fn import(client: &mut AiClient, harness: Option<HarnessKind>, style: Styl
                 }
                 _ => {
                     // ndjson: one value per line.
-                    let stdout = io::stdout();
-                    let mut out = stdout.lock();
-                    serde_json::to_writer(&mut out, &record)?;
+                    serde_json::to_writer(&mut *out, &record)?;
                     writeln!(out)?;
                     out.flush()?;
                 }
@@ -488,9 +518,18 @@ async fn import(client: &mut AiClient, harness: Option<HarnessKind>, style: Styl
             continue;
         }
 
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
         match &event {
+            // On a terminal, one line rewritten in place; otherwise a log line per session.
+            import_sessions_event::Event::Progress(p) if matches!(style, Style::Pretty) => {
+                sessions += 1;
+                imported += p.imported;
+                skipped += p.skipped;
+                write!(
+                    out,
+                    "\r\x1b[2Kimporting… {sessions} sessions, {imported} imported, {skipped} \
+                     skipped"
+                )?;
+            }
             import_sessions_event::Event::Progress(p) => {
                 writeln!(
                     out,
@@ -502,6 +541,9 @@ async fn import(client: &mut AiClient, harness: Option<HarnessKind>, style: Styl
                 )?;
             }
             import_sessions_event::Event::Summary(s) => {
+                if matches!(style, Style::Pretty) {
+                    write!(out, "\r\x1b[2K")?;
+                }
                 writeln!(
                     out,
                     "done: {} sessions, {} imported, {} skipped, {} failed",
@@ -514,9 +556,7 @@ async fn import(client: &mut AiClient, harness: Option<HarnessKind>, style: Styl
 
     if matches!(style, Style::Json) {
         let doc = serde_json::json!({ "sessions": json_sessions, "summary": json_summary });
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
-        serde_json::to_writer(&mut out, &doc)?;
+        serde_json::to_writer(&mut *out, &doc)?;
         writeln!(out)?;
     }
 

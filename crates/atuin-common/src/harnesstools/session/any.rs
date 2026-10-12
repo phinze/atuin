@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::time::SystemTime;
 
 use derive_more::From;
 use futures::stream::BoxStream;
@@ -66,6 +67,7 @@ impl AnyListener {
     #[must_use]
     pub fn events<F>(
         self,
+        since: SystemTime,
         checkpoint: impl Fn(&SessionId) -> F + Send + 'static,
     ) -> BoxStream<'static, Result<SessionEvent<AnyMessage>, CaptureError>>
     where
@@ -73,16 +75,16 @@ impl AnyListener {
     {
         match self {
             Self::Ccode(l) => {
-                l.events(checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
+                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
             }
             Self::Codex(l) => {
-                l.events(checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
+                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
             }
             Self::Opencode(l) => {
-                l.events(checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
+                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
             }
             Self::Pi(l) => {
-                l.events(checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
+                l.events(since, checkpoint).map_ok(|ev| ev.map_message(AnyMessage::from)).boxed()
             }
         }
     }
